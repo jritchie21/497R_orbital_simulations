@@ -57,6 +57,7 @@ class EnhancedOrbitSimulation:
         self.show_grid = True
         self.frame_type = 'ECI'
         self.earth_surface = None
+        self.locked_axis_limits = None
     
     def add_satellite(self, config: SatelliteConfig) -> None:
         self.satellites[config.name] = {
@@ -69,11 +70,21 @@ class EnhancedOrbitSimulation:
                 'body': None,
                 'trail': None,
                 'velocity_vector': None,
-                'attitude_axes': None
+                'attitude_axes': None,
+                'full_orbit': None
             }
         }
+        # Precompute full orbit points in ECI for plotting and axis sizing
+        try:
+            self.satellites[config.name]['full_orbit_points'] = self._generate_full_orbit_points(
+                config.orbital_elements
+            )
+        except Exception:
+            self.satellites[config.name]['full_orbit_points'] = None
         self._update_satellite_state(config.name, 0)
         print(f"Added satellite: {config.name}")
+        # Recompute and lock axes after addition
+        self._recompute_and_lock_axes()
     
     def remove_satellite(self, name: str) -> None:
         if name in self.satellites:
@@ -86,6 +97,8 @@ class EnhancedOrbitSimulation:
                         pass
             del self.satellites[name]
             print(f"Removed satellite: {name}")
+            # Recompute and lock axes after removal
+            self._recompute_and_lock_axes()
     
     def save_configuration(self, filename: str) -> None:
         config = {
@@ -308,10 +321,12 @@ class EnhancedOrbitSimulation:
         config = sat_data['config']
         state = sat_data['state']
         visuals = sat_data['visual_elements']
-        for element in visuals.values():
+        # Clear previous visual elements except persistent full-orbit curve
+        for key, element in visuals.items():
             if element is not None:
                 try:
-                    element.remove()
+                    if key != 'full_orbit':
+                        element.remove()
                 except:
                     pass
         if self.frame_type == 'ECI':
@@ -325,6 +340,25 @@ class EnhancedOrbitSimulation:
             else:
                 pos = state.position
         pos_km = pos / 1000
+        
+        # Draw full orbit (ECI frame only) once and keep it persistent
+        full_orbit_pts = self.satellites[name].get('full_orbit_points')
+        if full_orbit_pts is not None:
+            if self.frame_type == 'ECI':
+                if visuals.get('full_orbit') is None or visuals['full_orbit'] not in self.ax.lines:
+                    orbit_km = full_orbit_pts / 1000
+                    visuals['full_orbit'] = self.ax.plot(
+                        orbit_km[:, 0], orbit_km[:, 1], orbit_km[:, 2],
+                        color=config.color, linestyle=':', linewidth=1.0, alpha=0.6
+                    )[0]
+                else:
+                    visuals['full_orbit'].set_visible(True)
+            else:
+                if visuals.get('full_orbit') is not None:
+                    try:
+                        visuals['full_orbit'].set_visible(False)
+                    except:
+                        pass
         visuals['body'] = self.ax.scatter(
             pos_km[0], pos_km[1], pos_km[2],
             s=config.size, c=config.color, marker='o', alpha=0.9
@@ -401,19 +435,48 @@ class EnhancedOrbitSimulation:
         self._update_axis_limits()
     
     def _update_axis_limits(self) -> None:
-        if not self.satellites:
+        # Keep axes stable during animation; only apply locked limits if available
+        if self.locked_axis_limits is None:
             return
-        all_positions = []
+        xlim, ylim, zlim = self.locked_axis_limits
+        self.ax.set_xlim(xlim)
+        self.ax.set_ylim(ylim)
+        self.ax.set_zlim(zlim)
+
+    def _generate_full_orbit_points(self, elements: Dict, num_points: int = 360) -> np.ndarray:
+        """Generate ECI positions for a full orbit using true anomaly sampling."""
+        nu_vals = np.linspace(0.0, 360.0, num_points, endpoint=False)
+        positions = []
+        base = elements.copy()
+        if 'M' in base:
+            base.pop('M')
+        for nu in nu_vals:
+            base['nu'] = nu
+            pos, _ = self.orbital_mech.keplerian_to_cartesian(base, self.mu_earth)
+            positions.append(pos)
+        return np.array(positions)
+
+    def _recompute_and_lock_axes(self) -> None:
+        """Recompute best symmetric axis limits from satellites' full orbits and lock them."""
+        if self.ax is None:
+            return
+        max_extent_km = self.earth_radius / 1000 * 1.5
         for sat_data in self.satellites.values():
-            if sat_data['state'].position is not None:
-                all_positions.append(sat_data['state'].position / 1000)
-        if all_positions:
-            all_positions = np.array(all_positions)
-            max_range = np.max(np.abs(all_positions)) * 1.3
-            max_range = max(max_range, self.earth_radius/1000 * 1.5)
-            self.ax.set_xlim([-max_range, max_range])
-            self.ax.set_ylim([-max_range, max_range])
-            self.ax.set_zlim([-max_range, max_range])
+            pts = sat_data.get('full_orbit_points')
+            if pts is not None and len(pts) > 0:
+                ext = np.max(np.abs(pts)) / 1000.0
+                if np.isnan(ext) or np.isinf(ext):
+                    continue
+                max_extent_km = max(max_extent_km, ext)
+        max_range = max_extent_km * 1.3
+        self.locked_axis_limits = ([-max_range, max_range], [-max_range, max_range], [-max_range, max_range])
+        # Apply immediately if axes exist
+        try:
+            self.ax.set_xlim(self.locked_axis_limits[0])
+            self.ax.set_ylim(self.locked_axis_limits[1])
+            self.ax.set_zlim(self.locked_axis_limits[2])
+        except Exception:
+            pass
     
     def run_animation(self, duration_hours: float = 2.0) -> None:
         if not self.satellites:
