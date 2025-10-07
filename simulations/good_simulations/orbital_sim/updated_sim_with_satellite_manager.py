@@ -689,7 +689,7 @@ class EnhancedOrbitSimulation:
             'config': config,
             'state': SatelliteState(),
             'orbital_elements': config.orbital_elements,
-            'trail_points': [],
+            'trail_points': None,  # Start with None instead of empty list
             'attitude_dynamics': AttitudeDynamics(),
             'visual_elements': {
                 'body': None,
@@ -818,9 +818,16 @@ class EnhancedOrbitSimulation:
                 total_torque,
                 dt
             )
-        sat_data['trail_points'].append(position.copy())
-        if len(sat_data['trail_points']) > sat_data['config'].trail_length:
-            sat_data['trail_points'].pop(0)
+            
+        # Initialize or update trail points
+        if sat_data['trail_points'] is None:
+            # Only start the trail after a few seconds of simulation time
+            if time > 5.0:  # Wait 5 seconds before starting trail
+                sat_data['trail_points'] = []
+        elif len(sat_data['trail_points']) > 0:  # Only append if we've started the trail
+            sat_data['trail_points'].append(position.copy())
+            if len(sat_data['trail_points']) > sat_data['config'].trail_length:
+                sat_data['trail_points'].pop(0)
     
     def setup_plot(self) -> None:
         if self.test_mode:
@@ -1086,8 +1093,8 @@ class EnhancedOrbitSimulation:
                     color=color, arrow_length_ratio=0.1, linewidth=1, alpha=0.6
                 )
         
-        # Draw trail
-        if len(sat_data['trail_points']) > 1 and self.gui_controls['check_boxes'].get_status()[2]:
+        # Draw trail only if it has been initialized and has points
+        if sat_data['trail_points'] is not None and len(sat_data['trail_points']) > 1 and self.gui_controls['check_boxes'].get_status()[2]:
             trail_array = np.array(sat_data['trail_points'])
             
             # Transform trail based on frame
