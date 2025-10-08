@@ -1,599 +1,225 @@
+"""
+Basic quaternion practice with body-frame rotations.
+This is a simplified version focusing on the core quaternion mathematics
+for satellite attitude control using body-frame rotations.
+
+Body Frame vs World Frame:
+- World Frame: Each rotation is applied in world coordinates (fixed reference)
+- Body Frame: Each rotation is applied relative to current orientation (like a satellite)
+"""
+
 import numpy as np
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-import matplotlib.animation as animation
-import time
+from quaternion_math import QuaternionMath, create_sample_quaternions, create_sample_axis_angles, QuaternionFrameComparison
 
-class QuaternionArrowPlotter:
-    def __init__(self, test_mode=False):
-        self.test_mode = test_mode
-        if not test_mode:
-            self.fig = plt.figure(figsize=(10, 8))
-            self.ax = self.fig.add_subplot(111, projection='3d')
-        else:
-            # Create dummy objects for test mode
-            self.fig = None
-            self.ax = None
-        
-        # Initial arrow pointing along x-axis
-        self.original_arrow = np.array([1, 0, 0])  # Unit vector along x-axis
+
+class BodyFrameQuaternionDemo:
+    """Simple demonstration of body-frame quaternion rotations with frame comparison"""
+    
+    def __init__(self):
+        # Initial orientation: pointing along x-axis
+        self.original_arrow = np.array([1, 0, 0])
         self.current_arrow = self.original_arrow.copy()
         
-        # Keep track of previous positions for the trail
-        self.arrow_trail = [self.original_arrow.copy()]
-        self.trail_quivers = []  # Store references to trail arrows
-        self.satellite_lines = []  # Store references to satellite line objects
+        # Use the comparison class to track both frame types
+        self.frame_comparison = QuaternionFrameComparison()
         
-        # Current cumulative rotation quaternion
-        self.cumulative_quaternion = np.array([1, 0, 0, 0])  # Identity quaternion
-        
-        # Track if this is the first rotation
-        self.first_rotation = True
-        
-        # Animation state
-        self.animation_enabled = True
-        self.animation_speed = 0.1  # seconds per step
-        self.animation_steps = 20  # number of steps for smooth rotation
-        
-        # Axis-angle input state
-        self.axis_input = np.array([1, 0, 0])  # rotation axis
-        self.angle_input = 0.0  # rotation angle in degrees
-        
-        # Set up the plot
-        self.setup_plot()
-        
-    def setup_plot(self):
-        """Initialize the 3D plot with axes and reference satellite"""
-        if self.test_mode:
-            return  # Skip plotting in test mode
-            
-        # Set axis limits - zoomed in to see satellites better
-        self.ax.set_xlim([-0.8, 0.8])
-        self.ax.set_ylim([-0.8, 0.8])
-        self.ax.set_zlim([-0.8, 0.8])
-        
-        # Set labels
-        self.ax.set_xlabel('X')
-        self.ax.set_ylabel('Y')
-        self.ax.set_zlabel('Z')
-        self.ax.set_title('Quaternion Satellite Orientation - Cumulative Rotations')
-        
-        # Draw coordinate axes
-        self.ax.plot([0, 1], [0, 0], [0, 0], 'r-', linewidth=2, label='X-axis')
-        self.ax.plot([0, 0], [0, 1], [0, 0], 'g-', linewidth=2, label='Y-axis')
-        self.ax.plot([0, 0], [0, 0], [0, 1], 'b-', linewidth=2, label='Z-axis')
-        
-        # Draw original satellite (x-axis direction) - will be removed after first rotation
-        self.draw_satellite(self.original_arrow, color='red', alpha=0.5, scale=1.8)
-        
-        # Draw current satellite - scale the vector to make it shorter
-        scale_factor = 0.4  # Make the arrow 0.4 length
-        scaled_arrow = self.current_arrow * scale_factor
-        self.satellite_quiver = self.ax.quiver(0, 0, 0, scaled_arrow[0], scaled_arrow[1], scaled_arrow[2], 
-                                             color='purple', linewidth=2, arrow_length_ratio=0.1, label='Current Orientation')
-        
-        self.ax.legend()
-        self.ax.grid(True)
-        
-    def quaternion_to_rotation_matrix(self, q):
-        """Convert quaternion [w, x, y, z] to rotation matrix"""
-        w, x, y, z = q
-        
-        # Normalize quaternion
-        norm = np.sqrt(w*w + x*x + y*y + z*z)
-        w, x, y, z = w/norm, x/norm, y/norm, z/norm
-        
-        # Convert to rotation matrix
-        R = np.array([
-            [1 - 2*(y*y + z*z), 2*(x*y - w*z), 2*(x*z + w*y)],
-            [2*(x*y + w*z), 1 - 2*(x*x + z*z), 2*(y*z - w*x)],
-            [2*(x*z - w*y), 2*(y*z + w*x), 1 - 2*(x*x + y*y)]
-        ])
-        return R
+        # Keep track of rotation history
+        self.rotation_history = []
     
-    def multiply_quaternions(self, q1, q2):
-        """Multiply two quaternions: q1 * q2 (apply q2 then q1)"""
-        w1, x1, y1, z1 = q1
-        w2, x2, y2, z2 = q2
+    def apply_rotation(self, new_rotation_quaternion):
+        """
+        Apply a rotation and show both body frame and world frame results.
+        This demonstrates the difference between the two approaches.
         
-        w = w1*w2 - x1*x2 - y1*y2 - z1*z2
-        x = w1*x2 + x1*w2 + y1*z2 - z1*y2
-        y = w1*y2 - x1*z2 + y1*w2 + z1*x2
-        z = w1*z2 + x1*y2 - y1*x2 + z1*w2
+        Args:
+            new_rotation_quaternion: Quaternion representing the new rotation
+        """
+        # Store the rotation in history
+        self.rotation_history.append(new_rotation_quaternion.copy())
         
-        return np.array([w, x, y, z])
-    
-    def axis_angle_to_quaternion(self, axis, angle_deg):
-        """Convert axis-angle representation to quaternion"""
-        angle_rad = np.radians(angle_deg)
-        axis = np.array(axis)
-        axis = axis / np.linalg.norm(axis)  # normalize axis
+        # Apply rotation using the comparison class (tracks both frame types)
+        self.frame_comparison.apply_rotation(new_rotation_quaternion)
         
-        half_angle = angle_rad / 2
-        s = np.sin(half_angle)
-        
-        return np.array([
-            np.cos(half_angle),  # w
-            axis[0] * s,         # x
-            axis[1] * s,         # y
-            axis[2] * s          # z
-        ])
-    
-    def draw_satellite(self, direction, color='blue', alpha=0.7, scale=1.8):
-        """Draw a satellite box with fixed orientation, rotated by the cumulative quaternion"""
-        if self.test_mode:
-            return  # Skip drawing in test mode
-            
-        # Create satellite body dimensions (FIXED orientation - pointing along X, top along Z)
-        # Width = 5x height, Width = 3x length, so: height = width/5, length = width/3
-        body_width = 0.4 * scale   # Width along Y-axis (main dimension)
-        body_height = body_width / 5  # Height along Z-axis
-        body_length = body_width / 3  # Length along X-axis (pointing direction)
-        
-        # Define the 8 corners of the rectangular prism in FIXED orientation
-        # Satellite points along +X, top along +Z, right along +Y
-        corners = np.array([
-            [-body_length/2, -body_width/2, -body_height/2],  # Back-left-bottom
-            [body_length/2, -body_width/2, -body_height/2],   # Front-left-bottom
-            [body_length/2, body_width/2, -body_height/2],    # Front-right-bottom
-            [-body_length/2, body_width/2, -body_height/2],   # Back-right-bottom
-            [-body_length/2, -body_width/2, body_height/2],   # Back-left-top
-            [body_length/2, -body_width/2, body_height/2],    # Front-left-top
-            [body_length/2, body_width/2, body_height/2],     # Front-right-top
-            [-body_length/2, body_width/2, body_height/2]     # Back-right-top
-        ])
-        
-        # Apply the cumulative rotation to the ENTIRE satellite
-        R = self.quaternion_to_rotation_matrix(self.cumulative_quaternion)
-        rotated_corners = (R @ corners.T).T
-        
-        # Draw the satellite body with colored faces
-        # Define faces with their colors based on original coordinate axes
-        faces = [
-            # Face indices and colors
-            ([0, 1, 2, 3], 'grey', 0.3),      # bottom face (originally -Z) - grey
-            ([4, 5, 6, 7], 'blue', 0.7),     # top face (originally +Z) - blue
-            ([1, 2, 6, 5], 'red', 0.7),      # front face (originally +X) - red
-            ([0, 3, 7, 4], 'grey', 0.3),     # back face (originally -X) - grey
-            ([0, 1, 5, 4], 'grey', 0.3),    # left face (originally -Y) - grey
-            ([2, 3, 7, 6], 'green', 0.7)      # right face (originally +Y) - green
-        ]
-        
-        for face_indices, face_color, face_alpha in faces:
-            # Get the corners for this face
-            face_corners = rotated_corners[face_indices]
-            
-            # Create a polygon for the face
-            from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-            poly = Poly3DCollection([face_corners], alpha=face_alpha, facecolor=face_color, edgecolor='black', linewidth=1)
-            self.ax.add_collection3d(poly)
-            self.satellite_lines.append(poly)
-        
-        # Draw satellite body axes (X, Y, Z axes of the satellite)
-        axis_length = 0.3 * scale
-        axis_alpha = alpha * 0.6  # More transparent than the body
-        
-        # Define the satellite's body axes in FIXED orientation
-        # X-axis: pointing direction (front of satellite)
-        # Y-axis: right side of satellite  
-        # Z-axis: top of satellite
-        body_axes = np.array([
-            [axis_length, 0, 0],  # X-axis (pointing direction)
-            [0, axis_length, 0],  # Y-axis (right side)
-            [0, 0, axis_length]   # Z-axis (top)
-        ])
-        
-        # Apply the same rotation to the body axes
-        rotated_axes = (R @ body_axes.T).T
-        
-        # POINTING DIRECTION AXIS (red, same length as other axes)
-        pointing_length = 0.3 * scale  # Same length as body axes
-        pointing_axis = np.array([pointing_length, 0, 0])  # Fixed pointing along X
-        rotated_pointing = R @ pointing_axis
-        pointing_axis_line = self.ax.plot3D([0, rotated_pointing[0]], [0, rotated_pointing[1]], [0, rotated_pointing[2]], 
-                                          color='red', linewidth=3, alpha=0.8, linestyle='--')
-        self.satellite_lines.extend(pointing_axis_line)
-        
-        # X-axis of satellite (along body length) - REMOVED
-        
-        # Y-axis of satellite (along body width)
-        y_axis_line = self.ax.plot3D([0, rotated_axes[1, 0]], [0, rotated_axes[1, 1]], [0, rotated_axes[1, 2]], 
-                                   color='green', linewidth=3, alpha=axis_alpha, linestyle='--')
-        self.satellite_lines.extend(y_axis_line)
-        
-        # Z-axis of satellite (along body height)
-        z_axis_line = self.ax.plot3D([0, rotated_axes[2, 0]], [0, rotated_axes[2, 1]], [0, rotated_axes[2, 2]], 
-                                   color='blue', linewidth=3, alpha=axis_alpha, linestyle='--')
-        self.satellite_lines.extend(z_axis_line)
-        
-        # Face colors now show orientation directly - no need for marker dots
-        
-    
-    def rotate_arrow(self, quaternion):
-        """Apply the given quaternion to the current position (cumulative rotation)"""
-        if self.animation_enabled:
-            self.rotate_arrow_animated(quaternion)
-        else:
-            self.rotate_arrow_instant(quaternion)
-    
-    def rotate_arrow_instant(self, quaternion):
-        """Apply rotation instantly without animation"""
-        # Add the new quaternion to the cumulative rotation
-        self.cumulative_quaternion = self.multiply_quaternions(quaternion, self.cumulative_quaternion)
-        
-        # Convert cumulative quaternion to rotation matrix
-        R = self.quaternion_to_rotation_matrix(self.cumulative_quaternion)
-        
-        # Apply rotation to the original arrow
+        # Update the current arrow direction using body frame result (satellite-like)
+        R = QuaternionMath.quaternion_to_rotation_matrix(self.frame_comparison.body_frame_cumulative)
         self.current_arrow = R @ self.original_arrow
         
-        # Add current position to trail, but keep only the last 2 positions (1 previous + current)
-        self.arrow_trail.append(self.current_arrow.copy())
-        if len(self.arrow_trail) > 2:
-            self.arrow_trail = self.arrow_trail[-2:]  # Keep only last 2 positions
-        
-        # Mark that we've done the first rotation
-        self.first_rotation = False
-        
-        # Update the plot
-        self.update_plot()
+        print(f"Applied rotation: {new_rotation_quaternion}")
+        print(self.frame_comparison.get_comparison_string())
+        print(f"Current arrow direction (body frame): [{self.current_arrow[0]:.3f}, {self.current_arrow[1]:.3f}, {self.current_arrow[2]:.3f}]")
+        print()
     
-    def rotate_arrow_animated(self, quaternion):
-        """Apply rotation with smooth incremental animation"""
-        print(f"Animating rotation with {self.animation_steps} steps...")
-        
-        # Store the starting state
-        start_quaternion = self.cumulative_quaternion.copy()
-        start_arrow = self.current_arrow.copy()
-        
-        # Calculate the final cumulative quaternion
-        final_quaternion = self.multiply_quaternions(quaternion, self.cumulative_quaternion)
-        
-        # Animate through intermediate steps
-        for i in range(self.animation_steps + 1):
-            # Calculate interpolation factor
-            t = i / self.animation_steps
-            
-            # Interpolate between start and final quaternions
-            # For simplicity, we'll use linear interpolation of the angle
-            # This is not mathematically perfect SLERP but works for demonstration
-            interpolated_quat = self.slerp_quaternions(start_quaternion, final_quaternion, t)
-            
-            # Update cumulative quaternion temporarily
-            temp_cumulative = self.cumulative_quaternion
-            self.cumulative_quaternion = interpolated_quat
-            
-            # Convert to rotation matrix and apply
-            R = self.quaternion_to_rotation_matrix(self.cumulative_quaternion)
-            self.current_arrow = R @ self.original_arrow
-            
-            # Update the plot
-            self.update_plot()
-            
-            # Small delay for smooth animation
-            time.sleep(self.animation_speed)
-        
-        # Set final state
-        self.cumulative_quaternion = final_quaternion
-        R = self.quaternion_to_rotation_matrix(self.cumulative_quaternion)
-        self.current_arrow = R @ self.original_arrow
-        
-        # Add current position to trail
-        self.arrow_trail.append(self.current_arrow.copy())
-        if len(self.arrow_trail) > 2:
-            self.arrow_trail = self.arrow_trail[-2:]
-        
-        # Mark that we've done the first rotation
-        self.first_rotation = False
-        
-        # Final update
-        self.update_plot()
-        print("Animation complete!")
-    
-    def slerp_quaternions(self, q1, q2, t):
-        """Spherical linear interpolation between two quaternions"""
-        # Normalize quaternions
-        q1 = q1 / np.linalg.norm(q1)
-        q2 = q2 / np.linalg.norm(q2)
-        
-        # Compute the cosine of the angle between the two vectors
-        dot = np.dot(q1, q2)
-        
-        # If the dot product is negative, slerp won't take the shorter path
-        if dot < 0.0:
-            q2 = -q2
-            dot = -dot
-        
-        # If the inputs are too close for comfort, linearly interpolate
-        if dot > 0.9995:
-            result = q1 + t * (q2 - q1)
-            return result / np.linalg.norm(result)
-        
-        # Calculate the angle between the two quaternions
-        theta_0 = np.arccos(np.abs(dot))
-        sin_theta_0 = np.sin(theta_0)
-        
-        theta = theta_0 * t
-        sin_theta = np.sin(theta)
-        
-        s0 = np.cos(theta) - dot * sin_theta / sin_theta_0
-        s1 = sin_theta / sin_theta_0
-        
-        return s0 * q1 + s1 * q2
-        
-    def update_plot(self):
-        """Update the rotated satellite in the plot"""
-        if self.test_mode:
-            return  # Skip plotting in test mode
-            
-        # Clear the previous satellites
-        if hasattr(self, 'satellite_quiver'):
-            try:
-                self.satellite_quiver.remove()
-            except:
-                pass
-        
-        # Clear all trail satellites
-        for quiver in self.trail_quivers:
-            try:
-                quiver.remove()
-            except:
-                pass
-        self.trail_quivers.clear()
-        
-        # Clear all satellite line objects
-        for line in self.satellite_lines:
-            try:
-                line.remove()
-            except:
-                pass
-        self.satellite_lines.clear()
-        
-        # Only show previous arrow if this is not the first rotation
-        if not self.first_rotation and len(self.arrow_trail) > 1:
-            # Show only the most recent previous position arrow
-            arrow_pos = self.arrow_trail[-2]  # Second to last position
-            # Scale the previous arrow to same length as purple arrow (0.4)
-            scale_factor = 0.4
-            scaled_arrow_pos = arrow_pos * scale_factor
-            # Draw previous arrow
-            quiver = self.ax.quiver(0, 0, 0, scaled_arrow_pos[0], scaled_arrow_pos[1], scaled_arrow_pos[2], 
-                                  color='gray', linewidth=2, arrow_length_ratio=0.1, alpha=0.6, label='Previous Orientation')
-            self.trail_quivers.append(quiver)
-        
-        # Draw current satellite (most recent position)
-        self.draw_satellite(self.current_arrow, color='blue', alpha=1.0, scale=1.8)
-        # Scale the vector to make it shorter
-        scale_factor = 0.4  # Make the arrow 0.4 length
-        scaled_arrow = self.current_arrow * scale_factor
-        self.satellite_quiver = self.ax.quiver(0, 0, 0, scaled_arrow[0], scaled_arrow[1], scaled_arrow[2], 
-                                             color='purple', linewidth=2, arrow_length_ratio=0.1, label='Current Orientation')
-        
-        # Update the legend to include any new arrows
-        self.ax.legend()
-        
-        # Update the plot
-        plt.draw()
-        plt.pause(0.01)  # Small pause to ensure the plot updates
-        
-    def show(self):
-        """Display the plot"""
-        if not self.test_mode:
-            plt.show()
-        
-    def reset_rotation(self):
-        """Reset to original position and clear trail"""
+    def reset(self):
+        """Reset to initial orientation"""
         self.current_arrow = self.original_arrow.copy()
-        self.arrow_trail = [self.original_arrow.copy()]
-        self.cumulative_quaternion = np.array([1, 0, 0, 0])  # Identity quaternion
-        self.update_plot()
-        print("Reset to original position!")
-    
-    def print_arrow_info(self):
-        """Print information about the current arrow direction"""
-        print(f"Current arrow direction: [{self.current_arrow[0]:.3f}, {self.current_arrow[1]:.3f}, {self.current_arrow[2]:.3f}]")
-        print(f"Arrow magnitude: {np.linalg.norm(self.current_arrow):.3f}")
-        print(f"Number of rotations applied: {len(self.arrow_trail) - 1}")
-        print(f"Cumulative quaternion: [{self.cumulative_quaternion[0]:.3f}, {self.cumulative_quaternion[1]:.3f}, {self.cumulative_quaternion[2]:.3f}, {self.cumulative_quaternion[3]:.3f}]")
-    
-    def set_axis_angle_input(self, axis, angle):
-        """Set the axis-angle input parameters"""
-        self.axis_input = np.array(axis)
-        self.angle_input = angle
-        print(f"Set axis-angle input: axis={self.axis_input}, angle={self.angle_input}°")
-    
-    def apply_axis_angle_rotation(self):
-        """Apply rotation using current axis-angle input"""
-        quaternion = self.axis_angle_to_quaternion(self.axis_input, self.angle_input)
-        print(f"Converting axis-angle to quaternion: {quaternion}")
-        self.rotate_arrow(quaternion)
-    
-    def toggle_animation(self):
-        """Toggle animation on/off"""
-        self.animation_enabled = not self.animation_enabled
-        print(f"Animation {'enabled' if self.animation_enabled else 'disabled'}")
-    
-    def set_animation_speed(self, speed):
-        """Set animation speed (seconds per step)"""
-        self.animation_speed = speed
-        print(f"Animation speed set to {speed} seconds per step")
-    
-    def set_animation_steps(self, steps):
-        """Set number of animation steps"""
-        self.animation_steps = steps
-        print(f"Animation steps set to {steps}")
+        self.frame_comparison.reset()
+        self.rotation_history = []
+        print("Reset to initial orientation!")
+        print(self.frame_comparison.get_comparison_string())
+        print()
 
-def create_sample_quaternions():
-    """Create some sample quaternions for testing"""
-    samples = {
-        "Identity (no rotation)": [1, 0, 0, 0],
-        "90° rotation around Z-axis": [0.707, 0, 0, 0.707],
-        "90° rotation around Y-axis": [0.707, 0, 0.707, 0],
-        "90° rotation around X-axis": [0.707, 0.707, 0, 0],
-        "45° rotation around Z-axis": [0.924, 0, 0, 0.383],
-        "180° rotation around Z-axis": [0, 0, 0, 1],
-        "Complex rotation (45° around [1,1,1])": [0.924, 0.383, 0.383, 0.383]
-    }
-    return samples
 
-def create_sample_axis_angles():
-    """Create some sample axis-angle inputs for testing"""
-    samples = {
-        "90° around X-axis": ([1, 0, 0], 90),
-        "90° around Y-axis": ([0, 1, 0], 90),
-        "90° around Z-axis": ([0, 0, 1], 90),
-        "45° around X-axis": ([1, 0, 0], 45),
-        "180° around Z-axis": ([0, 0, 1], 180),
-        "60° around [1,1,1]": ([1, 1, 1], 60),
-        "30° around [1,0,1]": ([1, 0, 1], 30)
-    }
-    return samples
-
-def main():
-    """Main function to run the quaternion arrow plotter"""
-    print("Enhanced Quaternion Arrow Plotter with Axis-Angle Input")
+def demonstrate_body_vs_world_frame():
+    """Demonstrate the difference between body and world frame rotations"""
+    print("BODY FRAME vs WORLD FRAME DEMONSTRATION")
     print("=" * 60)
-    print("This tool shows how quaternions rotate an arrow from the X-axis to a new direction.")
-    print("Now with axis-angle input and smooth incremental animation!")
+    print("We'll apply two 90° rotations around Z-axis and see the difference.")
+    print("Notice how the cumulative quaternions differ between the two approaches!")
     print()
     
-    # Create the plotter
-    plotter = QuaternionArrowPlotter()
+    # Create two 90-degree Z rotations
+    rot_90_z = QuaternionMath.axis_angle_to_quaternion([0, 0, 1], 90)
     
-    # Show sample quaternions
+    demo = BodyFrameQuaternionDemo()
+    
+    print("Applying first 90° Z rotation:")
+    demo.apply_rotation(rot_90_z)
+    
+    print("Applying second 90° Z rotation:")
+    demo.apply_rotation(rot_90_z)
+    
+    print("EXPLANATION:")
+    print("- Body Frame: Each rotation is relative to current orientation (like a satellite)")
+    print("- World Frame: Each rotation is in fixed world coordinates")
+    print("- Notice how the quaternions and total angles differ!")
+    print("- Body frame gives 180° total (90° + 90° = 180°)")
+    print("- World frame gives a different result because the second rotation")
+    print("  is applied around the world's Z-axis, not the satellite's Z-axis")
+
+
+def interactive_demo():
+    """Interactive demonstration of body-frame quaternions"""
+    print("INTERACTIVE BODY-FRAME QUATERNION DEMO")
+    print("=" * 50)
+    print("This demonstrates how satellites rotate using body-frame quaternions.")
+    print("Each rotation is applied relative to the current orientation.")
+    print()
+    
+    demo = BodyFrameQuaternionDemo()
     samples = create_sample_quaternions()
-    print("Sample quaternions (w, x, y, z):")
-    for name, quat in samples.items():
-        print(f"  {name}: {quat}")
-    print()
-    
-    # Show sample axis-angle inputs
     axis_samples = create_sample_axis_angles()
-    print("Sample axis-angle inputs (axis, angle):")
-    for name, (axis, angle) in axis_samples.items():
-        print(f"  {name}: axis={axis}, angle={angle}°")
+    
+    print("Available sample rotations:")
+    for i, (name, _) in enumerate(samples.items(), 1):
+        print(f"{i}. {name}")
     print()
     
-    print("Animation is ENABLED by default. You can toggle it with option 6.")
-    print(f"Current animation settings: {plotter.animation_steps} steps, {plotter.animation_speed}s per step")
+    print("Available axis-angle rotations:")
+    for i, (name, _) in enumerate(axis_samples.items(), len(samples) + 1):
+        print(f"{i}. {name}")
     print()
     
-    # Show the initial plot
-    plt.show(block=False)
-    
-    # Interactive mode
     while True:
         print("\nOptions:")
-        print("1. Enter custom quaternion")
-        print("2. Use sample quaternion")
-        print("3. Show current arrow info")
-        print("4. Reset to original position")
-        print("5. Axis-angle input")
-        print("6. Toggle animation")
-        print("7. Set animation speed")
-        print("8. Set animation steps")
-        print("9. Exit")
+        print("1-7. Apply sample quaternion rotation")
+        print("8-14. Apply axis-angle rotation")
+        print("15. Show current status")
+        print("16. Reset")
+        print("17. Exit")
         
-        choice = input("\nEnter your choice (1-9): ").strip()
+        try:
+            choice = int(input("\nEnter choice (1-17): "))
+            
+            if 1 <= choice <= 7:
+                # Sample quaternion
+                sample_names = list(samples.keys())
+                quat = samples[sample_names[choice - 1]]
+                print(f"\nApplying: {sample_names[choice - 1]}")
+                demo.apply_rotation(quat)
+                
+            elif 8 <= choice <= 14:
+                # Axis-angle
+                axis_names = list(axis_samples.keys())
+                axis, angle = axis_samples[axis_names[choice - 8]]
+                quat = QuaternionMath.axis_angle_to_quaternion(axis, angle)
+                print(f"\nApplying: {axis_names[choice - 8]}")
+                demo.apply_rotation(quat)
+                
+            elif choice == 15:
+                print("Current status:")
+                print(demo.frame_comparison.get_comparison_string())
+                print(f"Current arrow direction: [{demo.current_arrow[0]:.3f}, {demo.current_arrow[1]:.3f}, {demo.current_arrow[2]:.3f}]")
+                
+            elif choice == 16:
+                demo.reset()
+                
+            elif choice == 17:
+                print("Goodbye!")
+                break
+                
+            else:
+                print("Invalid choice. Please enter 1-17.")
+                
+        except ValueError:
+            print("Error: Please enter a valid number.")
+        except IndexError:
+            print("Error: Invalid choice number.")
+
+
+def test_quaternion_operations():
+    """Test basic quaternion operations"""
+    print("QUATERNION OPERATIONS TEST")
+    print("=" * 40)
+    
+    # Test normalization
+    q1 = np.array([2, 4, 6, 8])
+    q1_norm = QuaternionMath.normalize_quaternion(q1)
+    print(f"Original: {q1}")
+    print(f"Normalized: {q1_norm}")
+    print(f"Magnitude: {np.linalg.norm(q1_norm):.6f}")
+    print()
+    
+    # Test quaternion multiplication
+    q2 = np.array([1, 0, 0, 0])  # Identity
+    q3 = np.array([0, 1, 0, 0])  # 180° around X
+    result = QuaternionMath.multiply_quaternions(q2, q3)
+    print(f"Identity * 180°X = {result}")
+    print()
+    
+    # Test axis-angle conversion
+    axis, angle = QuaternionMath.quaternion_to_axis_angle(q3)
+    print(f"180° around X -> axis: {axis}, angle: {angle:.1f}°")
+    print()
+    
+    # Test SLERP
+    q_start = np.array([1, 0, 0, 0])
+    q_end = np.array([0, 0, 0, 1])  # 180° around Z
+    q_mid = QuaternionMath.slerp_quaternions(q_start, q_end, 0.5)
+    print(f"SLERP halfway between identity and 180°Z: {q_mid}")
+    
+    axis_mid, angle_mid = QuaternionMath.quaternion_to_axis_angle(q_mid)
+    print(f"Midpoint rotation: {angle_mid:.1f}° around {axis_mid}")
+
+
+def main():
+    """Main function"""
+    print("BODY-FRAME QUATERNION PRACTICE")
+    print("=" * 50)
+    print("This program demonstrates quaternion mathematics for satellite attitude control.")
+    print("Body-frame rotations are how real satellites rotate - about their own axes!")
+    print()
+    
+    while True:
+        print("\nChoose a demonstration:")
+        print("1. Body Frame vs World Frame comparison")
+        print("2. Interactive body-frame quaternion demo")
+        print("3. Test quaternion operations")
+        print("4. Exit")
+        
+        choice = input("\nEnter choice (1-4): ").strip()
         
         if choice == "1":
-            try:
-                print("\nEnter quaternion as w, x, y, z (space or comma separated):")
-                quat_input = input("Quaternion: ").strip()
-                
-                # Parse input (handle both space and comma separation)
-                if ',' in quat_input:
-                    quat = [float(x.strip()) for x in quat_input.split(',')]
-                else:
-                    quat = [float(x) for x in quat_input.split()]
-                
-                if len(quat) != 4:
-                    print("Error: Quaternion must have exactly 4 components (w, x, y, z)")
-                    continue
-                
-                print(f"Using quaternion: {quat}")
-                plotter.rotate_arrow(quat)
-                plotter.print_arrow_info()
-                
-            except ValueError:
-                print("Error: Please enter valid numbers")
-                
+            demonstrate_body_vs_world_frame()
         elif choice == "2":
-            print("\nAvailable samples:")
-            for i, (name, quat) in enumerate(samples.items(), 1):
-                print(f"{i}. {name}")
-            
-            try:
-                sample_choice = int(input("Enter sample number: ")) - 1
-                sample_names = list(samples.keys())
-                if 0 <= sample_choice < len(sample_names):
-                    name = sample_names[sample_choice]
-                    quat = samples[name]
-                    print(f"Using: {name} - {quat}")
-                    plotter.rotate_arrow(quat)
-                    plotter.print_arrow_info()
-                else:
-                    print("Invalid sample number")
-            except ValueError:
-                print("Error: Please enter a valid number")
-                
+            interactive_demo()
         elif choice == "3":
-            plotter.print_arrow_info()
-            
+            test_quaternion_operations()
         elif choice == "4":
-            plotter.reset_rotation()
-            
-        elif choice == "5":
-            try:
-                print("\nAxis-angle input:")
-                print("Enter rotation axis as x, y, z (space or comma separated):")
-                axis_input = input("Axis: ").strip()
-                
-                # Parse axis input
-                if ',' in axis_input:
-                    axis = [float(x.strip()) for x in axis_input.split(',')]
-                else:
-                    axis = [float(x) for x in axis_input.split()]
-                
-                if len(axis) != 3:
-                    print("Error: Axis must have exactly 3 components (x, y, z)")
-                    continue
-                
-                angle = float(input("Angle (degrees): "))
-                
-                plotter.set_axis_angle_input(axis, angle)
-                plotter.apply_axis_angle_rotation()
-                plotter.print_arrow_info()
-                
-            except ValueError:
-                print("Error: Please enter valid numbers")
-                
-        elif choice == "6":
-            plotter.toggle_animation()
-            
-        elif choice == "7":
-            try:
-                speed = float(input("Enter animation speed (seconds per step): "))
-                plotter.set_animation_speed(speed)
-            except ValueError:
-                print("Error: Please enter a valid number")
-                
-        elif choice == "8":
-            try:
-                steps = int(input("Enter number of animation steps: "))
-                plotter.set_animation_steps(steps)
-            except ValueError:
-                print("Error: Please enter a valid integer")
-            
-        elif choice == "9":
             print("Goodbye!")
             break
-            
         else:
-            print("Invalid choice. Please enter 1-9.")
+            print("Invalid choice. Please enter 1-4.")
     
-    # Keep the plot open
-    plt.show()
 
 if __name__ == "__main__":
     main()
